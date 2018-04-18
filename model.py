@@ -402,6 +402,61 @@ class GumbelSoftmax(ScheduledVariable):
         return np.max([self.min,
                        self.max * np.exp(- self.anneal_rate * epoch)])
 
+
+class BaseSchedule(ScheduledVariable):
+    def __init__(self,schedule={0:0}):
+        self.schedule = schedule
+        super(BaseSchedule, self).__init__()
+
+class StepSchedule(BaseSchedule):
+    """
+       ______
+       |
+       |
+   ____|
+
+"""
+    def value(self,epoch):
+        assert epoch >= 0
+        pkey = None
+        pvalue = None
+        for key, value in sorted(self.schedule.items(),reverse=True):
+            # from large to small
+            key = int(key) # for when restoring from the json file
+            if key <= epoch:
+                return value
+            else:               # epoch < key 
+                pkey, pvalue = key, value
+
+        return pvalue
+
+class LinearSchedule(BaseSchedule):
+    """
+          ______
+         /
+        /
+   ____/
+
+"""
+    def value(self,epoch):
+        assert epoch >= 0
+        pkey = None
+        pvalue = None
+        for key, value in sorted(self.schedule.items(),reverse=True):
+            # from large to small
+            key = int(key) # for when restoring from the json file
+            if key <= epoch:
+                if pkey is None:
+                    return value
+                else:
+                    return \
+                        pvalue + \
+                        ( epoch - pkey ) * ( value - pvalue ) / ( key - pkey )
+            else:               # epoch < key 
+                pkey, pvalue = key, value
+
+        return pvalue
+
 # Network mixins ################################################################
 class AE(Network):
     """Autoencoder class. Supports SAVE and LOAD, as well as REPORT methods.
