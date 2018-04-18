@@ -345,7 +345,22 @@ def anneal_rate(epoch,min=0.1,max=5.0):
 def take_true(y_cat):
     return tf.slice(y_cat,[0,0,0],[-1,-1,1])
 
-class GumbelSoftmax:
+class ScheduledVariable:
+    """General variable which is changed during the course of training according to some schedule"""
+    def __init__(self,name="variable",):
+        self.variable = K.variable(self.value(0), name=name)
+        
+    def value(self,epoch):
+        """Should return a scalar value based on the current epoch.
+Each subclasses should implement a method for it."""
+        pass
+    
+    def update(self, epoch, logs):
+        K.set_value(
+            self.variable,
+            self.value(epoch))
+
+class GumbelSoftmax(ScheduledVariable):
     count = 0
     
     def __init__(self,N,M,min,max,anneal_rate):
@@ -357,13 +372,13 @@ class GumbelSoftmax:
         self.min = min
         self.max = max
         self.anneal_rate = anneal_rate
-        self.tau = K.variable(max, name="temperature")
+        super(GumbelSoftmax, self).__init__("temperature")
         
     def call(self,logits):
         u = K.random_uniform(K.shape(logits), 0, 1)
         gumbel = - K.log(-K.log(u + 1e-20) + 1e-20)
         return K.in_train_phase(
-            K.softmax( ( logits + gumbel ) / self.tau ),
+            K.softmax( ( logits + gumbel ) / self.variable ),
             K.softmax( ( logits + gumbel ) / self.min ))
     
     def __call__(self,prev):
@@ -382,28 +397,10 @@ class GumbelSoftmax:
         log_q = K.log(q + 1e-20)
         return - K.mean(q * (log_q - K.log(1.0/K.int_shape(logits)[-1])),
                         axis=tuple(range(1,len(K.int_shape(logits)))))
-    
-    def cool(self, epoch, logs):
-        K.set_value(
-            self.tau,
-            np.max([self.min,
-                    self.max * np.exp(- self.anneal_rate * epoch)]))
 
-class SimpleGumbelSoftmax(GumbelSoftmax):
-    "unlinke GumbelSoftmax, it does not have layers."
-    count = 0
-    def __init__(self,min,max,anneal_rate):
-        self.min = min
-        self.anneal_rate = anneal_rate
-        self.tau = K.variable(max, name="temperature")
-    
-    def __call__(self,prev):
-        if hasattr(self,'logits'):
-            raise ValueError('do not reuse the same GumbelSoftmax; reuse GumbelSoftmax.layers')
-        SimpleGumbelSoftmax.count += 1
-        c = SimpleGumbelSoftmax.count-1
-        self.logits = prev
-        return Lambda(self.call,name="simplegumbel_{}".format(c))(prev)
+    def value(self,epoch):
+        return np.max([self.min,
+                       self.max * np.exp(- self.anneal_rate * epoch)])
 
 # Network mixins ################################################################
 class AE(Network):
@@ -549,9 +546,9 @@ Note: references to self.parameters[key] are all hyperparameters."""
         def loss(x, y):
             return rec(x,y) + self.gs.loss()
 
-        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs.cool))
-        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs2.cool))
-        self.custom_log_functions['tau'] = lambda: K.get_value(self.gs.tau)
+        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs.update))
+        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs2.update))
+        self.custom_log_functions['tau'] = lambda: K.get_value(self.gs.variable)
         self.loss = loss
         self.metrics.append(rec)
         self.encoder     = Model(x, z)
@@ -712,10 +709,10 @@ class GumbelAE2(GumbelAE):
         def loss(x, y):
             return rec(x,y) + self.gs.loss() + self.gs2.loss()
 
-        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs.cool))
-        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs2.cool))
-        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs3.cool))
-        self.custom_log_functions['tau'] = lambda: K.get_value(self.gs.tau)
+        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs.update))
+        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs2.update))
+        self.callbacks.append(LambdaCallback(on_epoch_end=self.gs3.update))
+        self.custom_log_functions['tau'] = lambda: K.get_value(self.gs.variable)
         self.loss = loss
         self.metrics.append(rec)
         self.encoder     = Model(x, z)
@@ -1135,8 +1132,8 @@ We again use gumbel-softmax for representing A."""
             return reconstruction_loss + kl_loss
 
         self.metrics.append(rec)
-        self.callbacks.append(LambdaCallback(on_epoch_end=gs.cool))
-        self.custom_log_functions['tau'] = lambda: K.get_value(gs.tau)
+        self.callbacks.append(LambdaCallback(on_epoch_end=gs.update))
+        self.custom_log_functions['tau'] = lambda: K.get_value(gs.variable)
         self.loss = loss
         self.encoder     = Model(x, [pre,action])
         self.decoder     = Model([pre2,action2], y2)
