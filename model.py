@@ -390,7 +390,7 @@ Each subclasses should implement a method for it."""
 class GumbelSoftmax(ScheduledVariable):
     count = 0
     
-    def __init__(self,N,M,min,max,anneal_rate):
+    def __init__(self,N,M,min,max,anneal_rate,test_gumbel=False,test_softmax=False):
         self.N = N
         self.M = M
         self.layers = Sequential([
@@ -399,14 +399,29 @@ class GumbelSoftmax(ScheduledVariable):
         self.min = min
         self.max = max
         self.anneal_rate = anneal_rate
+        self.test_gumbel = test_gumbel
+        self.test_softmax = test_softmax
         super(GumbelSoftmax, self).__init__("temperature")
         
     def call(self,logits):
         u = K.random_uniform(K.shape(logits), 0, 1)
         gumbel = - K.log(-K.log(u + 1e-20) + 1e-20)
+        def softmax(x):
+            return K.softmax(x / self.min)
+        def argmax(x):
+            return K.one_hot(K.argmax(x),self.M)
+        
+        if self.test_gumbel:
+            test_logits = logits + gumbel
+        else:
+            test_logits = logits
+        if self.test_softmax:
+            one_hot_fn = softmax
+        else:
+            one_hot_fn = argmax
         return K.in_train_phase(
             K.softmax( ( logits + gumbel ) / self.variable ),
-            K.softmax( ( logits + gumbel ) / self.min ))
+            one_hot_fn(test_logits))
     
     def __call__(self,prev):
         if hasattr(self,'logits'):
