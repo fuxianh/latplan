@@ -424,13 +424,14 @@ class GumbelSoftmax(ScheduledVariable):
             one_hot_fn(test_logits))
     
     def __call__(self,prev):
-        if hasattr(self,'logits'):
-            raise ValueError('do not reuse the same GumbelSoftmax; reuse GumbelSoftmax.layers')
         GumbelSoftmax.count += 1
         c = GumbelSoftmax.count-1
         prev = flatten(prev)
         logits = self.layers(prev)
-        self.logits = logits
+        if hasattr(self,"logits"):
+            print("reusing gumbel-softmax; loss is calcurated from the input of the first application")
+        else:
+            self.logits = logits
         return Lambda(self.call,name="gumbel_{}".format(c))(logits)
     
     def loss(self):
@@ -444,7 +445,6 @@ class GumbelSoftmax(ScheduledVariable):
     def value(self,epoch):
         return np.max([self.min,
                        self.max * np.exp(- self.anneal_rate * epoch)])
-
 
 class BaseSchedule(ScheduledVariable):
     def __init__(self,schedule={0:0}):
